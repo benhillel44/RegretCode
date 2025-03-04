@@ -7,9 +7,13 @@ from copy import deepcopy
 import pickle
 import pandas as pd
 import plotly.express as px
+import concurrent.futures
+import os
+from filelock import FileLock
 
 
 PATH_TO_MEMOIZATION_FILES = "mem_archive/"
+RESULT_FILE_NAME = "results_new.csv"
 
 
 class Policy(ABC):
@@ -39,8 +43,11 @@ class Policy(ABC):
         :return:
         """
         filename = f"{self.GetClassID()}_{self.sys.getId()}.pkl"
-        with open(PATH_TO_MEMOIZATION_FILES + filename, 'wb') as f:
-            pickle.dump(self.memo, f)
+        filepath = PATH_TO_MEMOIZATION_FILES + filename
+        lockfile = filepath + ".lock"
+        with FileLock(lockfile):
+            with open(filepath, 'wb') as f:
+                pickle.dump(self.memo, f)
 
     def load_mem(self):
         """
@@ -58,6 +65,9 @@ class Policy(ABC):
         except FileNotFoundError:
             print("memoization file not found")
             return {}
+        except EOFError:
+            print(f"memoization file - {filename} is empty")
+            return {}
 
     def __del__(self):
         if self.load_memory:
@@ -70,7 +80,7 @@ class LookAheadPolicy(Policy):
         super().__init__(system, load_mem)
 
     def GetClassID(self):
-        return f"LH_{self.look_ahead_depth}"
+        return f"LH"
 
     def _serialize_state(self, state):
         """ Serialize the numpy array state for memoization key. """
@@ -121,6 +131,24 @@ class LookAheadPolicy(Policy):
         result = (best_actions, best_cost)
         self.memo[key] = result
         return result
+
+    def save_mem(self):
+        """
+        save the memoization dictionary to a file with the system id, k and N as the file name
+        :return:
+        """
+        filename = f"{self.GetClassID()}_{self.sys.getId()}.pkl"
+        # save the updated memoization
+        filepath = PATH_TO_MEMOIZATION_FILES + filename
+        lockfile = filepath + ".lock"
+        with FileLock(lockfile):
+            # check if the file updated since this instance was created
+            if os.path.exists(PATH_TO_MEMOIZATION_FILES + filename):
+                with open(PATH_TO_MEMOIZATION_FILES + filename, 'rb') as f:
+                    old_memo = pickle.load(f)
+                    self.memo.update(old_memo)
+            with open(filepath, 'wb') as f:
+                pickle.dump(self.memo, f)
 
 
 class RegretPolicy(Policy):
@@ -416,10 +444,10 @@ def run(x_0, N_steps, _look_ahead_depth, load_memory=False, random_grid=False):
     print(f"optimal total cost = {look_ahead_cost}")
     print(f"regret = {V}")
 
-    g_visualizer = GridVisualizer(GridSystem.COST_MAT, start_pos=x_0)
-    g_visualizer.add_movement_path([reg_w[i] + reg_u[i] for i in range(len(reg_w))], color='red')
-    g_visualizer.add_movement_path([reg_w[i] + look_ahead_u[i] for i in range(len(look_ahead_u))], color='green')
-    g_visualizer.visualize()
+    # g_visualizer = GridVisualizer(GridSystem.COST_MAT, start_pos=x_0)
+    # g_visualizer.add_movement_path([reg_w[i] + reg_u[i] for i in range(len(reg_w))], color='red')
+    # g_visualizer.add_movement_path([reg_w[i] + look_ahead_u[i] for i in range(len(look_ahead_u))], color='green')
+    # g_visualizer.visualize()
 
     run_dat = {
         "system_id": gs.getId(),
@@ -436,25 +464,10 @@ def run(x_0, N_steps, _look_ahead_depth, load_memory=False, random_grid=False):
         "simulation_time": simulation_time
     }
     return run_dat
-def main():
-    load_memory = True
-    x_0 = np.array((5, 5))
-    # load the results from the previous run, if they exist
-    try:
-        res_df = pd.read_csv("results.csv")
-    except FileNotFoundError:
-        res_df = pd.DataFrame()
-    for N in range(16, 21):
-        for k in range(1, 5):
-            print(f"Running for N = {N}, k = {k}")
-            run_dat = run(x_0, N, k, load_memory, random_grid=True)
-            res_df = res_df.append(run_dat, ignore_index=True)
-        res_df.to_csv("results.csv", index=False)
-
 
 def plot_results():
     # plot the regret vs N for each k using plolty
-    df = pd.read_csv("results.csv")
+    df = pd.read_csv(RESULT_FILE_NAME)
     # sort the data frame by N
     df = df.sort_values(by="N")
     # for each system id, plot the regret vs N for each k
@@ -489,6 +502,42 @@ def test(x_0, N_steps, _look_ahead_depth, load_memory=False, random_grid=False):
     g_visualizer.add_movement_path([reg_w[i] + reg_u[i] for i in range(len(reg_w))], color='red')
     g_visualizer.add_movement_path([reg_w[i] + look_ahead_u[i] for i in range(len(look_ahead_u))], color='green')
     g_visualizer.visualize()
+
+
+def run_simulation(N_range, k, x_0, load_memory, random_grid):
+    """Function to execute a single simulation"""
+    print(f"Running for N range = {N_range}, k = {k} on PID {os.getpid()}")
+
+    if type(N_range) == int:
+        N_range = [N_range]
+    res = pd.DataFrame()
+    for N in N_range:
+        run_dat = run(x_0, N, k, load_memory, random_grid=random_grid)
+        res = res.append(run_dat, ignore_index=True)
+
+    return res
+
+def main():
+    load_memory = True
+    x_0 = np.array((5, 5))
+    N_range = range(1, 2)
+    k_range = range(2, 5)
+    random_grid = True
+    # load the results from the previous run, if they exist
+    try:
+        results = pd.read_csv(RESULT_FILE_NAME)
+    except FileNotFoundError:
+        results = pd.DataFrame()
+
+
+    # Use multiprocessing to parallelize the simulations
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        futures = {executor.submit(run_simulation, N_range, k, x_0, load_memory, random_grid): k for k in k_range}
+        # Collect results
+        results = pd.concat([results]+[future.result() for future in concurrent.futures.as_completed(futures)])
+
+    # Save to CSV once at the end
+    results.to_csv(RESULT_FILE_NAME, index=False)
 
 
 if __name__ == "__main__":
