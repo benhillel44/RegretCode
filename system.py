@@ -90,9 +90,15 @@ class GridSystem(System):
 
     def set_version2(self):
         np.random.seed(self.RANDSEED)
-        GridSystem.COST_MAT = np.random.randint(1, 100, (10, 10))
-        GridSystem.VALID_ACTIONS = [np.array((1, 0)), np.array((-1, 0)), np.array((0, 1)), np.array((0, -1))]
-        GridSystem.VALID_NOISES = [np.array((1, 1)), np.array((1, -1)), np.array((-1, 1)), np.array((-1, -1))]
+        GridSystem.COST_MAT = np.random.randint(1, 100, (8, 8))
+        GridSystem.VALID_ACTIONS = [np.array((1, 0)), np.array((0, 1)),
+                         np.array((-1, 0)), np.array((0, -1)),
+                         np.array((1, 1)), np.array((1, -1)),
+                         np.array((-1, 1)), np.array((-1, -1))]
+        GridSystem.VALID_NOISES = [np.array((2, 1)), np.array((1, 2)),
+                                np.array((-2, 1)), np.array((1, -2)),
+                                np.array((2, -1)), np.array((-1, 2)),
+                                np.array((-2, -1)), np.array((-1, -2))]
 
     def getId(self):
         return GridSystemHasher().generate_unique_id(self)
